@@ -16,6 +16,8 @@ const session = require('express-session');
 
 // App
 const app = express();
+app.set('view engine', 'pug');
+app.set('views', path.join(__dirname, 'views'));
 
 // Global Middleware
 if (process.env.NODE_ENV === 'development') {
