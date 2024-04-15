@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const { promisify } = require('util');
 const jwt = require('jsonwebtoken');
 const User = require('./../models/userModel');
-const Doctor = require('./../models/doctorModel');
 const catchAsync = require('./../utils/catchAsync');
 const AppError = require('./../utils/appError');
 
@@ -12,7 +11,7 @@ const signToken = (id) => {
   });
 };
 
-const createSendToken = (user, statusCode, res, userType) => {
+const createSendToken = (user, statusCode, res) => {
   const token = signToken(user._id);
   const cookieOptions = {
     expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRES_IN * 24 * 60 * 60 * 1000),
@@ -25,7 +24,6 @@ const createSendToken = (user, statusCode, res, userType) => {
   res.status(statusCode).json({
     status: 'success',
     userType,
-    newUser: user.new,
     token,
     data: {
       user,
@@ -33,24 +31,8 @@ const createSendToken = (user, statusCode, res, userType) => {
   });
 };
 exports.signup = catchAsync(async (req, res, next) => {
-  const email = req.body.email;
-  if (req.body.userType == 'user') {
-    const doctor = await Doctor.find({ email });
-    if (doctor.length) return next(new AppError(`Duplicate field value : ${email}. Please use another value`, 401));
-
-    const newUser = await User.create(req.body);
-    createSendToken(newUser, 200, res, 'user');
-  } else if (req.body.userType == 'doctor') {
-    const user = await User.find({ email });
-    if (user.length) return next(new AppError(`Duplicate field value : ${email}. Please use another value`, 401));
-
-    const newDoctor = await Doctor.create(req.body);
-    createSendToken(newDoctor, 201, res, 'doctor');
-  } else
-    res.status(401).json({
-      status: 'fail',
-      message: 'please provide userType [user | doctor]',
-    });
+  const newUser = await User.create(req.body);
+  createSendToken(newUser, 200, res);
 });
 
 exports.login = catchAsync(async (req, res, next) => {
@@ -58,17 +40,13 @@ exports.login = catchAsync(async (req, res, next) => {
   if (!email || !password) {
     return next(new AppError('Please provide email and password', 400));
   }
-  let userType = 'user';
   let user = await User.findOne({ email }).select('+password');
-  if (!user) {
-    user = await Doctor.findOne({ email }).select('+password');
-    userType = 'doctor';
-  }
+
   if (!user || !(await user.correctPassword(password, user.password))) {
     return next(new AppError('Incorrect email or password', 401));
   }
   user.photo = undefined;
-  createSendToken(user, 200, res, userType, req);
+  createSendToken(user, 200, res);
 });
 exports.protect = catchAsync(async (req, res, next) => {
   // 1) Getting token and check if it's there
@@ -85,10 +63,7 @@ exports.protect = catchAsync(async (req, res, next) => {
   const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
 
   // 3) Check if user still exists
-  let currentUser;
-  currentUser = await User.findById(decoded.id);
-  if (!currentUser) currentUser = await Doctor.findById(decoded.id);
-
+  const currentUser = await User.findById(decoded.id);
   if (!currentUser) return next(new AppError(`The user beloging to this token does no longer exist.`, 401));
 
   // 4) Check if user changeed password after the token was issued
@@ -104,10 +79,8 @@ exports.protect = catchAsync(async (req, res, next) => {
 
 exports.forgotPassword = catchAsync(async (req, res, next) => {
   // 1) Get user based on POSTed email
-  let user;
   const { email } = req.body;
-  user = await User.findOne({ email });
-  if (!user) user = await Doctor.findOne({ email });
+  const user = await User.findOne({ email });
 
   if (!user) return next(new AppError(`There is no user with email address`, 404));
   // 2) Generate random token
@@ -133,17 +106,10 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
   // 1) get user based on the otp
   const { OTP } = req.body;
   const hashedOTP = crypto.createHash('sha256').update(OTP.toString()).digest('hex');
-  let user;
-
-  user = await User.findOne({
+  const user = await User.findOne({
     passwordResetOTP: hashedOTP,
     passwordResetExpires: { $gt: Date.now() },
   });
-  if (!user)
-    user = await Doctor.findOne({
-      passwordResetOTP: hashedOTP,
-      passwordResetExpires: { $gt: Date.now() },
-    });
 
   // 2) If OTP has not expired, set the new password
   if (!user) {
@@ -162,12 +128,8 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
 });
 exports.updatePassword = catchAsync(async (req, res, next) => {
   // 1) Get user from collection
-  let user;
-  if (req.userType === 'user') {
-    user = await User.findById(req.user.id).select('+password');
-  } else if (req.userType === 'doctor') {
-    user = await Doctor.findById(req.user.id).select('+password');
-  }
+
+  const user = await User.findById(req.user.id).select('+password');
   // 2) Check if POSTed password is correct
   if (!(await user.correctPassword(req.body.passwordCurrent, user.password)))
     return next(new AppError('Your current password is wrong', 401));
